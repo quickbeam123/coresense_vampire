@@ -16,9 +16,12 @@ find_package(coresense_msgs REQUIRED)
 
 ament_python_install_package(${PROJECT_NAME})
 
+include_directories(include)
+
 # install python node
-install(PROGRAMS
+install(PROGRAMS tools/vampire_z3_rel_static_master_10435
   scripts/mynode.py
+  scripts/session_test.py
   DESTINATION lib/${PROJECT_NAME})
 
 

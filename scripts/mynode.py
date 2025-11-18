@@ -6,10 +6,13 @@ import uuid
 import subprocess
 import threading
 
-from coresense_msgs.srv import StartSession, AddToSession, ListSession # , GetSolution
-# from session_manager_pkg.action import SolveSession
+from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution
+from coresense_msgs.action import QueryReasoner
 
-class SessionManager(Node):
+import os
+from ament_index_python.packages import get_package_prefix
+
+class VampireRunner(Node):
     def __init__(self):
         super().__init__('session_manager')
 
@@ -20,21 +23,19 @@ class SessionManager(Node):
         self.start_srv = self.create_service(StartSession, 'start_session', self.start_session_cb)
         self.add_srv = self.create_service(AddToSession, 'add_to_session', self.add_to_session_cb)
         self.list_srv = self.create_service(ListSession, 'list_session', self.list_session_cb)
-        # self.get_sol_srv = self.create_service(GetSolution, 'get_solution', self.get_solution_cb)
+        self.get_sol_srv = self.create_service(GetSolution, 'get_solution', self.get_solution_cb)
 
         # Action
-        '''
         self.solve_action = ActionServer(
             self,
-            SolveSession,
-            'solve_session',
+            QueryReasoner,
+            'query_reasoner',
             execute_callback=self.execute_solve_cb,
             goal_callback=self.goal_cb,
             cancel_callback=self.cancel_cb
         )
-        '''
 
-        self.get_logger().info("SessionManager node ready.")
+        self.get_logger().info("VampireRunner node ready.")
 
     # ---- Services ----
     def start_session_cb(self, request, response):
@@ -63,7 +64,6 @@ class SessionManager(Node):
         response.formulas = self.sessions[sid]
         return response
 
-    '''
     def get_solution_cb(self, request, response):
         sid = request.session_id
         if sid not in self.solutions:
@@ -82,47 +82,45 @@ class SessionManager(Node):
         return GoalResponse.ACCEPT
 
     def cancel_cb(self, goal_handle):
-        self.get_logger().info("Solver goal canceled.")
-        return CancelResponse.ACCEPT
+        self.get_logger().info(f"Request to cancel solve action for session {goal_handle.request.session_id}")
+        # TODO: have a means of killing a running Vampire
+        return CancelResponse.REJECT
 
     async def execute_solve_cb(self, goal_handle):
         sid = goal_handle.request.session_id
-        goal_handle.publish_feedback(SolveSession.Feedback(feedback=f"Launching solver for {sid}..."))
+        goal_handle.publish_feedback(QueryReasoner.Feedback(status=f"Launching solver for {sid}..."))
 
-        data = "\n".join(self.sessions[sid])
+        prefix = get_package_prefix('coresense_vampire')
+        exe = os.path.join(prefix, 'lib', 'coresense_vampire', 'vampire_z3_rel_static_master_10435')
+
         solver_proc = subprocess.Popen(
-            ["ros2", "run", "solver_pkg", "solver_exec"],  # or path to your solver binary
+            [exe]+goal_handle.request.configuration.split(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
 
-        def feed_solver():
-            try:
-                solver_proc.stdin.write(data)
-                solver_proc.stdin.close()
-            except Exception as e:
-                self.get_logger().error(f"Error feeding solver: {e}")
+        data = "\n".join(self.sessions[sid]+[goal_handle.request.query])
+        out, err = solver_proc.communicate(input=data)
 
-        threading.Thread(target=feed_solver, daemon=True).start()
-        out, err = solver_proc.communicate()
+        result = QueryReasoner.Result()
+        result.code = solver_proc.returncode
+        result.result = f"Out:\n{out}\nErr:\n{err}"
 
         if solver_proc.returncode != 0:
-            self.get_logger().error(f"Solver failed: {err}")
-            goal_handle.succeed()
-            result = SolveSession.Result(success=False, result=err)
+            self.get_logger().error(f"Solver failed:\nOut:\n{out}\nErr:\n{err}")
+            goal_handle.abort()
         else:
             self.get_logger().info(f"Solver succeeded for {sid}")
             self.solutions[sid] = out.strip()
-            result = SolveSession.Result(success=True, result=out.strip())
+            goal_handle.succeed()
 
         return result
-    '''
 
 def main(args=None):
     rclpy.init(args=args)
-    node = SessionManager()
+    node = VampireRunner()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
