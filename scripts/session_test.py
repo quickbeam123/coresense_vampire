@@ -47,6 +47,17 @@ class SessionTester(Node):
         self.get_logger().info(f"Sending query: {query} under configuration: {configuration}")
         goal_future = action_client.send_goal_async(goal_msg)
 
+        if False:
+            def cancel_later():
+                if goal_future.done():
+                    goal_handle = goal_future.result()
+                    self.get_logger().info("Sending cancel request!")
+                    goal_handle.cancel_goal_async()
+                else:
+                    self.get_logger().warning("Goal not yet accepted, cannot cancel.")
+
+            self.create_timer(0.5, cancel_later)
+
         rclpy.spin_until_future_complete(self, goal_future)
         goal_handle = goal_future.result()
 

@@ -4,7 +4,7 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 import uuid
 import subprocess
-import threading
+import time
 
 from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution
 from coresense_msgs.action import QueryReasoner
@@ -83,10 +83,9 @@ class VampireRunner(Node):
 
     def cancel_cb(self, goal_handle):
         self.get_logger().info(f"Request to cancel solve action for session {goal_handle.request.session_id}")
-        # TODO: have a means of killing a running Vampire
-        return CancelResponse.REJECT
+        return CancelResponse.ACCEPT
 
-    async def execute_solve_cb(self, goal_handle):
+    def execute_solve_cb(self, goal_handle):
         sid = goal_handle.request.session_id
         goal_handle.publish_feedback(QueryReasoner.Feedback(status=f"Launching solver for {sid}..."))
 
@@ -102,7 +101,37 @@ class VampireRunner(Node):
         )
 
         data = "\n".join(self.sessions[sid]+[goal_handle.request.query])
-        out, err = solver_proc.communicate(input=data)
+
+        try:
+            solver_proc.stdin.write(data)
+            solver_proc.stdin.close()
+        except Exception:
+            pass
+
+        # Monitor process in a loop
+        while solver_proc.poll() is None:  # still running
+            self.get_logger().info("Polling...")
+            time.sleep(0.1)
+
+            # Check for cancellation from client
+            if goal_handle.is_cancel_requested:
+                self.get_logger().info("Cancel requested, stopping solver...")
+
+                solver_proc.terminate()
+
+                try:
+                    solver_proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    solver_proc.kill()
+
+                goal_handle.canceled()
+                result = QueryReasoner.Result()
+                result.result = "Canceled"
+                result.code = 2 # arbitrarily (let's define this conventions properly later)
+                return result
+
+        solver_proc.stdin = None # so that communicate won't touch stdin
+        out, err = solver_proc.communicate()
 
         result = QueryReasoner.Result()
         result.code = solver_proc.returncode
@@ -121,10 +150,9 @@ class VampireRunner(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = VampireRunner()
-    rclpy.spin(node)
+    rclpy.spin(node,executor = rclpy.executors.MultiThreadedExecutor())
     node.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
