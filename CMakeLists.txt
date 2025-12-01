@@ -22,6 +22,7 @@ include_directories(include)
 install(PROGRAMS tools/vampire_z3_rel_static_martin-xdb-coresense_10526
   scripts/mynode.py
   scripts/session_test.py
+  scripts/external.py
   DESTINATION lib/${PROJECT_NAME})
 
 

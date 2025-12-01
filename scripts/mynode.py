@@ -7,7 +7,7 @@ import subprocess
 import time
 import select
 
-from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution
+from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution, TptpExternal
 from coresense_msgs.action import QueryReasoner
 
 import os, socket
@@ -86,6 +86,30 @@ class VampireRunner(Node):
         self.get_logger().info(f"Request to cancel solve action for session {goal_handle.request.session_id}")
         return CancelResponse.ACCEPT
 
+    def call_service(self, srv_type, srv_name, request,
+                    availability_timeout=1.0,
+                    response_timeout=2.0):
+
+        # Create client
+        client = self.create_client(srv_type, srv_name)
+
+        # Check availability with timeout
+        available = client.wait_for_service(timeout_sec=availability_timeout)
+        if not available:
+            raise RuntimeError(f"Service {srv_name} not available after {availability_timeout}s")
+
+        # Call asynchronously
+        future = client.call_async(request)
+
+        # Wait for response (executor threads will handle callbacks)
+        start = time.time()
+        while not future.done():
+            if time.time() - start > response_timeout:
+                raise TimeoutError(f"Service {srv_name} did not respond within {response_timeout}s")
+            time.sleep(0.01)   # yield without busy spinning
+
+        return future.result()
+
     def execute_solve_cb(self, goal_handle):
         sid = goal_handle.request.session_id
         goal_handle.publish_feedback(QueryReasoner.Feedback(status=f"Launching solver for {sid}..."))
@@ -132,8 +156,17 @@ class VampireRunner(Node):
                         msg = line.decode().rstrip()
                         self.get_logger().info(f"Received: {msg}")
 
-                        # Send reply
-                        sock_file.write(f"{msg.split()[1].lower()}\n".encode())
+                        try:
+                            service_name,q = msg.split()
+                            answer = self.call_service(TptpExternal, service_name, TptpExternal.Request(question=q)).answer
+                            self.get_logger().info(f"Sending back {len(answer)} answer lines:")
+                            for a in answer:
+                                self.get_logger().info(f"   {a}")
+                                sock_file.write(f"{a}\n".encode())
+                        except Exception as e:
+                            self.get_logger().info(f"Exception during external service call: {e}")
+
+                        # TODO: this write will fail, had Vampire timed-out in the meantime...
                         sock_file.write(f"\n".encode())
                         sock_file.flush()
 
