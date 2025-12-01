@@ -119,6 +119,106 @@ class SessionTester(Node):
 
         self.run_get_solution(session_id)
 
+    def run_two(self):
+        # --------------------------------------------------------
+        # Create TWO sessions
+        # --------------------------------------------------------
+        start1 = self.call_service(StartSession, '/start_session', StartSession.Request())
+        start2 = self.call_service(StartSession, '/start_session', StartSession.Request())
+
+        sid1 = start1.session_id
+        sid2 = start2.session_id
+
+        self.get_logger().info(f"Session 1 ID: {sid1}")
+        self.get_logger().info(f"Session 2 ID: {sid2}")
+
+        # --------------------------------------------------------
+        # Fill each session with formulas
+        # --------------------------------------------------------
+        formulas = ["include('SET010+0.ax')."]
+
+        for formula in formulas:
+            req = AddToSession.Request()
+            req.session_id = sid1
+            req.formula = formula
+            self.call_service(AddToSession, '/add_to_session', req)
+
+        for formula in formulas:
+            req = AddToSession.Request()
+            req.session_id = sid2
+            req.formula = formula
+            self.call_service(AddToSession, '/add_to_session', req)
+
+        # --------------------------------------------------------
+        # Check list contents
+        # --------------------------------------------------------
+        def show_contents(sid):
+            list_req = ListSession.Request()
+            list_req.session_id = sid
+            res = self.call_service(ListSession, '/list_session', list_req)
+            self.get_logger().info(f"[{sid}] contents: {res.formulas}")
+
+        show_contents(sid1)
+        show_contents(sid2)
+
+        # --------------------------------------------------------
+        # RUN TWO SOLVERS IN PARALLEL
+        # --------------------------------------------------------
+        self.get_logger().info("Running QueryReasoner on BOTH sessions in parallel...")
+
+        # Create two action clients (can reuse or create fresh)
+        client1 = ActionClient(self, QueryReasoner, '/query_reasoner')
+        client2 = ActionClient(self, QueryReasoner, '/query_reasoner')
+
+        client1.wait_for_server()
+        client2.wait_for_server()
+
+        # Build two goals
+        goal1 = QueryReasoner.Goal()
+        goal1.session_id = sid1
+        goal1.query = "cnf(b,negated_conjecture,a!=b)."
+        goal1.configuration = "--input_syntax tptp -t 10"
+
+        goal2 = QueryReasoner.Goal()
+        goal2.session_id = sid2
+        goal2.query = "cnf(b,negated_conjecture,a!=b)."
+        goal2.configuration = "--input_syntax tptp -t 10"
+
+        # Send BOTH goals (parallel)
+        goal_future1 = client1.send_goal_async(goal1)
+        goal_future2 = client2.send_goal_async(goal2)
+
+        # Wait for acceptance of both goals
+        rclpy.spin_until_future_complete(self, goal_future1)
+        rclpy.spin_until_future_complete(self, goal_future2)
+
+        goal_handle1 = goal_future1.result()
+        goal_handle2 = goal_future2.result()
+
+        if not goal_handle1.accepted:
+            self.get_logger().error(f"Session {sid1} goal rejected.")
+        if not goal_handle2.accepted:
+            self.get_logger().error(f"Session {sid2} goal rejected.")
+
+        # Get result futures (still parallel)
+        result_future1 = goal_handle1.get_result_async()
+        result_future2 = goal_handle2.get_result_async()
+
+        # Now block until BOTH results are available
+        rclpy.spin_until_future_complete(self, result_future1)
+        rclpy.spin_until_future_complete(self, result_future2)
+
+        result1 = result_future1.result().result
+        result2 = result_future2.result().result
+
+        # Print results
+        self.get_logger().info(f"[{sid1}] QueryReasoner result: {result1.result}")
+        self.get_logger().info(f"[{sid2}] QueryReasoner result: {result2.result}")
+
+        # Also show codes if desired
+        self.get_logger().info(f"[{sid1}] Return code: {result1.code}")
+        self.get_logger().info(f"[{sid2}] Return code: {result2.code}")
+
 
 def main():
     rclpy.init()
