@@ -95,7 +95,8 @@ class SessionTester(Node):
 
         # Add formulas
         for formula in [
-            "include('SET010+0.ax').",
+            # "include('SET010+0.ax').",
+            'fof(a,external,?[A]:p(A),"/external").'
         ]:
             add_req = AddToSession.Request()
             add_req.session_id = session_id
@@ -112,8 +113,8 @@ class SessionTester(Node):
 
         self.run_get_solution(session_id)
 
-        query = "cnf(b,negated_conjecture,a!=b)."
-        reasoner_result = self.run_reasoner_query(session_id, query, configuration="--input_syntax tptp -t 1")
+        query = "fof(c,conjecture,?[A]:p(A))."
+        reasoner_result = self.run_reasoner_query(session_id, query, configuration="--input_syntax tptp -updr off -t 1")
         # if reasoner_result:
         #    self.get_logger().info(f"The whole reasoner_result: {reasoner_result}")
 

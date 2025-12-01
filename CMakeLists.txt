@@ -19,7 +19,7 @@ ament_python_install_package(${PROJECT_NAME})
 include_directories(include)
 
 # install python node
-install(PROGRAMS tools/vampire_z3_rel_static_master_10435
+install(PROGRAMS tools/vampire_z3_rel_static_martin-xdb-coresense_10526
   scripts/mynode.py
   scripts/session_test.py
   DESTINATION lib/${PROJECT_NAME})

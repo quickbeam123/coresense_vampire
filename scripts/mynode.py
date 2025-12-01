@@ -5,11 +5,12 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 import uuid
 import subprocess
 import time
+import select
 
 from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution
 from coresense_msgs.action import QueryReasoner
 
-import os
+import os, socket
 from ament_index_python.packages import get_package_prefix
 
 class VampireRunner(Node):
@@ -90,62 +91,85 @@ class VampireRunner(Node):
         goal_handle.publish_feedback(QueryReasoner.Feedback(status=f"Launching solver for {sid}..."))
 
         prefix = get_package_prefix('coresense_vampire')
-        exe = os.path.join(prefix, 'lib', 'coresense_vampire', 'vampire_z3_rel_static_master_10435')
+        exe = os.path.join(prefix, 'lib', 'coresense_vampire', 'vampire_z3_rel_static_martin-xdb-coresense_10526')
 
-        solver_proc = subprocess.Popen(
-            [exe]+goal_handle.request.configuration.split(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        parent_sock, child_sock = socket.socketpair(socket.AF_UNIX)
+        sock_file = parent_sock.makefile("rwb", buffering=0)
 
-        data = "\n".join(self.sessions[sid]+[goal_handle.request.query])
+        with parent_sock, sock_file:
+            # self.get_logger().info(f"child_sock.fileno() was {child_sock.fileno()}")
 
-        try:
-            solver_proc.stdin.write(data)
-            solver_proc.stdin.close()
-        except Exception:
-            pass
+            solver_proc = subprocess.Popen(
+                # "valgrind --leak-check=full --track-origins=yes".split()+
+                [exe,"-esfd",str(child_sock.fileno())]+goal_handle.request.configuration.split(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                pass_fds=[child_sock.fileno()],   # keep this fd open across exec
+                text=True
+            )
 
-        # Monitor process in a loop
-        while solver_proc.poll() is None:  # still running
-            self.get_logger().info("Polling...")
-            time.sleep(0.1)
+            child_sock.close()
 
-            # Check for cancellation from client
-            if goal_handle.is_cancel_requested:
-                self.get_logger().info("Cancel requested, stopping solver...")
+            data = "\n".join(self.sessions[sid]+[goal_handle.request.query])
 
-                solver_proc.terminate()
+            try:
+                solver_proc.stdin.write(data)
+                solver_proc.stdin.close()
+            except Exception:
+                pass
 
-                try:
-                    solver_proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    solver_proc.kill()
+            # Monitor process in a loop
+            while solver_proc.poll() is None:  # still running
+                self.get_logger().info("Polling...")
+                time.sleep(0.1)
 
-                goal_handle.canceled()
-                result = QueryReasoner.Result()
-                result.result = "Canceled"
-                result.code = 2 # arbitrarily (let's define this conventions properly later)
-                return result
+                # Non-blocking readiness check
+                readable, _, _ = select.select([parent_sock], [], [], 0)
+                if readable:
+                    line = sock_file.readline()
+                    if line: # otherwise child closed FD ?
+                        msg = line.decode().rstrip()
+                        self.get_logger().info(f"Received: {msg}")
 
-        solver_proc.stdin = None # so that communicate won't touch stdin
-        out, err = solver_proc.communicate()
+                        # Send reply
+                        sock_file.write(f"{msg.split()[1].lower()}\n".encode())
+                        sock_file.write(f"\n".encode())
+                        sock_file.flush()
 
-        result = QueryReasoner.Result()
-        result.code = solver_proc.returncode
-        result.result = f"Out:\n{out}\nErr:\n{err}"
+                # Check for cancellation from client
+                if goal_handle.is_cancel_requested:
+                    self.get_logger().info("Cancel requested, stopping solver...")
 
-        if solver_proc.returncode != 0:
-            self.get_logger().error(f"Solver failed:\nOut:\n{out}\nErr:\n{err}")
-            goal_handle.abort()
-        else:
-            self.get_logger().info(f"Solver succeeded for {sid}")
-            self.solutions[sid] = out.strip()
-            goal_handle.succeed()
+                    solver_proc.terminate()
 
-        return result
+                    try:
+                        solver_proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        solver_proc.kill()
+
+                    goal_handle.canceled()
+                    result = QueryReasoner.Result()
+                    result.result = "Canceled"
+                    result.code = 2 # arbitrarily (let's define this conventions properly later)
+                    return result
+
+            solver_proc.stdin = None # so that communicate won't touch stdin
+            out, err = solver_proc.communicate()
+
+            result = QueryReasoner.Result()
+            result.code = solver_proc.returncode
+            result.result = f"Out:\n{out}\nErr:\n{err}"
+
+            if solver_proc.returncode != 0:
+                self.get_logger().error(f"Solver failed:\nOut:\n{out}\nErr:\n{err}")
+                goal_handle.abort()
+            else:
+                self.get_logger().info(f"Solver succeeded for {sid}")
+                self.solutions[sid] = out.strip()
+                goal_handle.succeed()
+
+            return result
 
 def main(args=None):
     rclpy.init(args=args)
