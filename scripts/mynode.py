@@ -51,7 +51,7 @@ class VampireRunner(Node):
         if sid not in self.sessions:
             response.success = False
             return response
-        self.sessions[sid].append(request.formula)
+        self.sessions[sid].append(request.tptp)
         response.success = True
         return response
 
@@ -110,6 +110,27 @@ class VampireRunner(Node):
 
         return future.result()
 
+    def process_tptp_question(self, tptp_question):
+        """
+            A tptp question can look like this: p(a,X0,b), or could even contain nested subterms: q(f(a,f(b,c)),Y).
+            Split it into a predicate_name and a list of arguments, where variable arguments are represented as emtpy strings
+
+            For now, we don't allow propositions (zero arity predicates);
+            (Note that confirming a proposition is true cannot be achieved as the empty-list answer means "no, nothing";
+             we would need a proper list-of-list convention with the distinction between [] - for "no", and [[]] - "yes (and no args)")
+        """
+        # TODO: an exception instead?
+        assert tptp_question[-1] == ")"
+        predname_and_body = tptp_question[:-1].split("(")
+        # TODO: nested , should be ignored!
+        args = predname_and_body[1].split(",")
+        # from args, replace those that start with a capital letter (i.e., the variables) with ""
+        args = ["" if a and a[0].isupper() else a for a in args]
+        return predname_and_body[0], args
+
+    def create_tptp_answer(self, predname, answer_args):
+        return f"{predname}({",".join(answer_args)})"
+
     def execute_solve_cb(self, goal_handle):
         sid = goal_handle.request.session_id
         goal_handle.publish_feedback(QueryReasoner.Feedback(status=f"Launching solver for {sid}..."))
@@ -156,13 +177,8 @@ class VampireRunner(Node):
                         msg = line.decode().rstrip()
                         self.get_logger().info(f"Received: {msg}")
 
-                        service_name,q = msg.split()
-                        # TODO: make more robust: # p(a,X0,b)
-                        assert q[-1] == ")"
-                        predname_and_body = q[:-1].split("(")
-                        args = predname_and_body[1].split(",")
-                        # from args, replace those that start with a capital letter with ""
-                        args = ["" if a and a[0].isupper() else a for a in args]
+                        service_name,tptp_question = msg.split()
+                        predname, args = self.process_tptp_question(tptp_question)
 
                         answers = [] # vampire is waiting; will answer "nothing" if the actual source fails to deliver
                         try:
@@ -171,17 +187,16 @@ class VampireRunner(Node):
                             self.get_logger().info(f"Exception during external service call: {e}")
 
                         try:
-                            # TODO: turn into proper errors
+                            # TODO: turn into proper error
                             assert len(answers) % len(args) == 0
+
                             num_lines = len(answers) // len(args)
                             self.get_logger().info(f"Sending back {num_lines} answer lines:")
                             while answers:
                                 answer_args = answers[0:len(args)]
                                 answers = answers[len(args):]
 
-                                # Here we are turning the answer back into TPTP:
-                                atom = f"{predname_and_body[0]}({",".join(answer_args)})"
-
+                                atom = self.create_tptp_answer(predname,answer_args)
                                 self.get_logger().info(f"   {atom}")
                                 sock_file.write(f"{atom}\n".encode())
 

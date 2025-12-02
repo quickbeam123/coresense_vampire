@@ -100,7 +100,7 @@ class SessionTester(Node):
         ]:
             add_req = AddToSession.Request()
             add_req.session_id = session_id
-            add_req.formula = formula
+            add_req.tptp = formula
 
             add_res = self.call_service(AddToSession, '/add_to_session', add_req)
             self.get_logger().info(f"Added formula '{formula}': {add_res.success}")
