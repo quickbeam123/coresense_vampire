@@ -7,7 +7,7 @@ import subprocess
 import time
 import select
 
-from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution, TptpExternal
+from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution, VampireExternalPredicate
 from coresense_msgs.action import QueryReasoner
 
 import os, socket
@@ -156,19 +156,40 @@ class VampireRunner(Node):
                         msg = line.decode().rstrip()
                         self.get_logger().info(f"Received: {msg}")
 
+                        service_name,q = msg.split()
+                        # TODO: make more robust: # p(a,X0,b)
+                        assert q[-1] == ")"
+                        predname_and_body = q[:-1].split("(")
+                        args = predname_and_body[1].split(",")
+                        # from args, replace those that start with a capital letter with ""
+                        args = ["" if a and a[0].isupper() else a for a in args]
+
+                        answers = [] # vampire is waiting; will answer "nothing" if the actual source fails to deliver
                         try:
-                            service_name,q = msg.split()
-                            answer = self.call_service(TptpExternal, service_name, TptpExternal.Request(question=q)).answer
-                            self.get_logger().info(f"Sending back {len(answer)} answer lines:")
-                            for a in answer:
-                                self.get_logger().info(f"   {a}")
-                                sock_file.write(f"{a}\n".encode())
+                            answers = self.call_service(VampireExternalPredicate, service_name, VampireExternalPredicate.Request(parameters=args)).answers
                         except Exception as e:
                             self.get_logger().info(f"Exception during external service call: {e}")
 
-                        # TODO: this write will fail, had Vampire timed-out in the meantime...
-                        sock_file.write(f"\n".encode())
-                        sock_file.flush()
+                        try:
+                            # TODO: turn into proper errors
+                            assert len(answers) % len(args) == 0
+                            num_lines = len(answers) // len(args)
+                            self.get_logger().info(f"Sending back {num_lines} answer lines:")
+                            while answers:
+                                answer_args = answers[0:len(args)]
+                                answers = answers[len(args):]
+
+                                # Here we are turning the answer back into TPTP:
+                                atom = f"{predname_and_body[0]}({",".join(answer_args)})"
+
+                                self.get_logger().info(f"   {atom}")
+                                sock_file.write(f"{atom}\n".encode())
+
+                            sock_file.write(f"\n".encode())
+                            sock_file.flush()
+                        except BrokenPipeError as e:
+                            # if we can't talk to it, it probably died
+                            pass
 
                 # Check for cancellation from client
                 if goal_handle.is_cancel_requested:
