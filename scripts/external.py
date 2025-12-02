@@ -5,7 +5,7 @@ from rclpy.node import Node
 
 # Import your generated service type
 # Make sure the package name matches your workspace!
-from coresense_msgs.srv import TptpExternal
+from coresense_msgs.srv import VampireExternalPredicate
 
 
 class TptpExternalService(Node):
@@ -15,7 +15,7 @@ class TptpExternalService(Node):
 
         # Create the service
         self.srv = self.create_service(
-            TptpExternal,
+            VampireExternalPredicate,
             'external',
             self.handle_tptp_query
         )
@@ -23,11 +23,12 @@ class TptpExternalService(Node):
         self.get_logger().info("TPTP External service ready.")
 
     def handle_tptp_query(self, request, response):
-        self.get_logger().info(f"Received question: {request.question}")
+        self.get_logger().info(f"Received question: {request.parameters}")
 
-        response.answer = [request.question.lower()] # always replies a singleton answer; with lower(), we turn variable names to constants - just a hack without a deeper meaning
+        response.answers = [f"c{i}" if p == "" else p for i,p in enumerate(request.parameters)]
+        # response.answers = []
 
-        self.get_logger().info(f"Returning answer: {response.answer}")
+        self.get_logger().info(f"Returning answers: {response.answers}")
 
         return response
 
