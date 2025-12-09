@@ -30,11 +30,19 @@ def process_tptp_question(tptp_question):
     depth = 0
     last_mark = None
     predname = None
+
     args = []
+    def add_arg(arg):
+        if not arg:
+            raise CantParseQuestionException(f"Question {tptp_question} yields an empty argument!")
+        args.append(arg)
+
     while i < len(tptp_question):
       if state == 0: # reading pred, waiting for "("
         if tptp_question[i] == "(":
           predname = tptp_question[:i]
+          if not len(predname):
+              raise CantParseQuestionException(f"Question {tptp_question} had an empty predicate name!")
           state = 1
           last_mark = i+1
       elif state == 1:
@@ -44,10 +52,10 @@ def process_tptp_question(tptp_question):
           if depth > 0:
             depth -= 1
           else:
-            args.append(tptp_question[last_mark:i])
+            add_arg(tptp_question[last_mark:i])
             state = 2
         elif tptp_question[i] == "," and depth == 0:
-          args.append(tptp_question[last_mark:i])
+          add_arg(tptp_question[last_mark:i])
           last_mark = i+1
       else: # state == 2
         raise CantParseQuestionException(f"Reading tptp question {tptp_question} past the closing ')'")
@@ -59,6 +67,9 @@ def process_tptp_question(tptp_question):
     # from args, replace those that start with a capital letter (i.e., the variables) with ""
     args = ["" if a and a[0].isupper() else a for a in args]
     return predname, args
+
+def create_tptp_answer(predname, answer_args):
+    return f"{predname}({",".join(answer_args)})"
 
 
 class VampireRunner(Node):
@@ -158,8 +169,7 @@ class VampireRunner(Node):
 
         return future.result()
 
-    def create_tptp_answer(self, predname, answer_args):
-        return f"{predname}({",".join(answer_args)})"
+
 
     def execute_solve_cb(self, goal_handle):
         sid = goal_handle.request.session_id
@@ -215,22 +225,22 @@ class VampireRunner(Node):
                             try:
                                 answers = self.call_service(VampireExternalPredicate, service_name, VampireExternalPredicate.Request(parameters=args)).answers
                             except Exception as e:
-                                self.get_logger().info(f"Exception during external service call: {e}")
+                                self.get_logger().warning(f"Exception during external service call: {e}")
 
                         except CantParseQuestionException:
-                            self.get_logger().info(f"Couldn't parse tptp question: '{tptp_question}'. Will pretend the source has no answers.")
+                            self.get_logger().warning(f"Couldn't parse tptp question: '{tptp_question}'. Will pretend the source has no answers.")
 
                         try:
-                            # TODO: turn into proper error
-                            assert len(answers) % len(args) == 0
+                            if len(answers) % len(args) != 0:
+                                self.get_logger().warning(f"Number of provided answer slots does not devide question predicate's arity!")
 
                             num_lines = len(answers) // len(args)
                             self.get_logger().info(f"Sending back {num_lines} answer lines:")
-                            while answers:
+                            while len(answers) >= len(args):
                                 answer_args = answers[0:len(args)]
                                 answers = answers[len(args):]
 
-                                atom = self.create_tptp_answer(predname,answer_args)
+                                atom = create_tptp_answer(predname,answer_args)
                                 self.get_logger().info(f"   {atom}")
                                 sock_file.write(f"{atom}\n".encode())
 
