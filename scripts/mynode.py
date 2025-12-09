@@ -13,6 +13,54 @@ from coresense_msgs.action import QueryReasoner
 import os, socket
 from ament_index_python.packages import get_package_prefix
 
+class CantParseQuestionException(Exception):
+    pass
+
+def process_tptp_question(tptp_question):
+    """
+        A tptp question can look like this: p(a,X0,b), or could even contain nested subterms: q(f(a,f(b,c)),Y)
+        Split it into a predicate_name and a list of arguments, where variable arguments are represented as emtpy strings
+
+        For now, we don't allow propositions (zero arity predicates);
+        (Note that confirming a proposition is true cannot be achieved as the empty-list answer means "no, nothing";
+            we would need a proper list-of-list convention with the distinction between [] - for "no", and [[]] - "yes (and no args)")
+    """
+    i = 0
+    state = 0
+    depth = 0
+    last_mark = None
+    predname = None
+    args = []
+    while i < len(tptp_question):
+      if state == 0: # reading pred, waiting for "("
+        if tptp_question[i] == "(":
+          predname = tptp_question[:i]
+          state = 1
+          last_mark = i+1
+      elif state == 1:
+        if tptp_question[i] == "(":
+          depth += 1
+        elif tptp_question[i] == ")":
+          if depth > 0:
+            depth -= 1
+          else:
+            args.append(tptp_question[last_mark:i])
+            state = 2
+        elif tptp_question[i] == "," and depth == 0:
+          args.append(tptp_question[last_mark:i])
+          last_mark = i+1
+      else: # state == 2
+        raise CantParseQuestionException(f"Reading tptp question {tptp_question} past the closing ')'")
+      i += 1
+
+    if state != 2:
+      raise CantParseQuestionException(f"Tptp question {tptp_question} not properly closed with ')'")
+
+    # from args, replace those that start with a capital letter (i.e., the variables) with ""
+    args = ["" if a and a[0].isupper() else a for a in args]
+    return predname, args
+
+
 class VampireRunner(Node):
     def __init__(self):
         super().__init__('session_manager')
@@ -110,24 +158,6 @@ class VampireRunner(Node):
 
         return future.result()
 
-    def process_tptp_question(self, tptp_question):
-        """
-            A tptp question can look like this: p(a,X0,b), or could even contain nested subterms: q(f(a,f(b,c)),Y).
-            Split it into a predicate_name and a list of arguments, where variable arguments are represented as emtpy strings
-
-            For now, we don't allow propositions (zero arity predicates);
-            (Note that confirming a proposition is true cannot be achieved as the empty-list answer means "no, nothing";
-             we would need a proper list-of-list convention with the distinction between [] - for "no", and [[]] - "yes (and no args)")
-        """
-        # TODO: an exception instead?
-        assert tptp_question[-1] == ")"
-        predname_and_body = tptp_question[:-1].split("(")
-        # TODO: nested , should be ignored!
-        args = predname_and_body[1].split(",")
-        # from args, replace those that start with a capital letter (i.e., the variables) with ""
-        args = ["" if a and a[0].isupper() else a for a in args]
-        return predname_and_body[0], args
-
     def create_tptp_answer(self, predname, answer_args):
         return f"{predname}({",".join(answer_args)})"
 
@@ -177,14 +207,18 @@ class VampireRunner(Node):
                         msg = line.decode().rstrip()
                         self.get_logger().info(f"Received: {msg}")
 
-                        service_name,tptp_question = msg.split()
-                        predname, args = self.process_tptp_question(tptp_question)
-
                         answers = [] # vampire is waiting; will answer "nothing" if the actual source fails to deliver
                         try:
-                            answers = self.call_service(VampireExternalPredicate, service_name, VampireExternalPredicate.Request(parameters=args)).answers
-                        except Exception as e:
-                            self.get_logger().info(f"Exception during external service call: {e}")
+                            service_name,tptp_question = msg.split()
+                            predname, args = process_tptp_question(tptp_question)
+
+                            try:
+                                answers = self.call_service(VampireExternalPredicate, service_name, VampireExternalPredicate.Request(parameters=args)).answers
+                            except Exception as e:
+                                self.get_logger().info(f"Exception during external service call: {e}")
+
+                        except CantParseQuestionException:
+                            self.get_logger().info(f"Couldn't parse tptp question: '{tptp_question}'. Will pretend the source has no answers.")
 
                         try:
                             # TODO: turn into proper error
