@@ -96,7 +96,10 @@ class SessionTester(Node):
         # Add formulas
         for formula in [
             # "include('SET010+0.ax').",
-            'fof(a,external,?[A]:p(A),"/external").'
+            'tff(t1,type,j : $tType).',
+            'tff(t2,type,p : j > $o).',
+          # 'tff(t3,type,c0 : j).',
+            'tff(a,external,?[A:j]:p(A),"/external").'
         ]:
             add_req = AddToSession.Request()
             add_req.session_id = session_id
@@ -113,7 +116,7 @@ class SessionTester(Node):
 
         self.run_get_solution(session_id)
 
-        query = "fof(c,conjecture,?[A]:p(A))."
+        query = "tff(c,conjecture,?[A:j]:p(A))."
         reasoner_result = self.run_reasoner_query(session_id, query, configuration="--input_syntax tptp -updr off -t 1")
         # if reasoner_result:
         #    self.get_logger().info(f"The whole reasoner_result: {reasoner_result}")
