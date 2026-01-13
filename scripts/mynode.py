@@ -108,8 +108,10 @@ class VampireRunner(Node):
     def add_to_session_cb(self, request, response):
         sid = request.session_id
         if sid not in self.sessions:
+            self.get_logger().info(f"Couldn't add to session {sid}. Session not found!")
             response.success = False
             return response
+        self.get_logger().info(f"Adding to session {sid}. Formula: {request.tptp}")
         self.sessions[sid].append(request.tptp)
         response.success = True
         return response
@@ -117,9 +119,11 @@ class VampireRunner(Node):
     def list_session_cb(self, request, response):
         sid = request.session_id
         if sid not in self.sessions:
+            self.get_logger().info(f"Couldn't list a session {sid}. Session not found!")
             response.success = False
             response.formulas = []
             return response
+        self.get_logger().info(f"Listing a session {sid}.")
         response.success = True
         response.formulas = self.sessions[sid]
         return response
@@ -127,11 +131,13 @@ class VampireRunner(Node):
     def get_solution_cb(self, request, response):
         sid = request.session_id
         if sid not in self.solutions:
+            self.get_logger().info(f"Get solution failed for session {sid}. Solution not found!")
             response.success = False
             response.solution = ""
         else:
             response.success = True
             response.solution = self.solutions[sid]
+            self.get_logger().info(f"Get solution called for session {sid}.")
         return response
 
     # ---- Actions ----
