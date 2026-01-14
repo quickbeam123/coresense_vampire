@@ -6,6 +6,7 @@ import uuid
 import subprocess
 import time
 import select
+import queue, threading
 
 from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution, VampireExternalPredicate
 from coresense_msgs.action import QueryReasoner
@@ -71,6 +72,21 @@ def process_tptp_question(tptp_question):
 def create_tptp_answer(predname, answer_args):
     return f"{predname}({",".join(answer_args)})"
 
+def stream_reader(pipe, output_queue):
+    try:
+        for line in iter(pipe.readline, ''):
+            output_queue.put(line)
+    finally:
+        pipe.close()
+
+def drain_queue(q):
+    items = []
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except queue.Empty:
+            break
+    return items
 
 class VampireRunner(Node):
     def __init__(self):
@@ -210,6 +226,23 @@ class VampireRunner(Node):
             except Exception:
                 pass
 
+            stdout_q = queue.Queue()
+            stderr_q = queue.Queue()
+
+            stdout_thread = threading.Thread(
+                target=stream_reader,
+                args=(solver_proc.stdout, stdout_q),
+                daemon=True
+            )
+            stdout_thread.start()
+
+            stderr_thread = threading.Thread(
+                target=stream_reader,
+                args=(solver_proc.stderr, stderr_q),
+                daemon=True
+            )
+            stderr_thread.start()
+
             # Monitor process in a loop
             while solver_proc.poll() is None:  # still running
                 self.get_logger().info("Polling...")
@@ -273,8 +306,16 @@ class VampireRunner(Node):
                     result.code = 2 # arbitrarily (let's define this conventions properly later)
                     return result
 
+            """
             solver_proc.stdin = None # so that communicate won't touch stdin
             out, err = solver_proc.communicate()
+            """
+
+            stdout_thread.join(timeout=1.0)
+            stderr_thread.join(timeout=1.0)
+
+            out = ''.join(drain_queue(stdout_q))
+            err = ''.join(drain_queue(stderr_q))
 
             result = QueryReasoner.Result()
             result.code = solver_proc.returncode
