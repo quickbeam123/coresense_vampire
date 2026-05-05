@@ -8,7 +8,7 @@ import time
 import select
 import queue, threading
 
-from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution, VampireExternalPredicate
+from coresense_msgs.srv import StartSession, AddToSession, RemoveFromSession, ListSession, GetSolution, VampireExternalPredicate
 from coresense_msgs.action import QueryReasoner
 
 import os, socket
@@ -92,12 +92,13 @@ class VampireRunner(Node):
     def __init__(self):
         super().__init__('session_manager')
 
-        self.sessions = {}      # session_id -> list of strings
+        self.sessions = {}      # session_id -> {formula_set_id -> list of strings}
         self.solutions = {}     # session_id -> string
 
         # Services
         self.start_srv = self.create_service(StartSession, 'start_session', self.start_session_cb)
         self.add_srv = self.create_service(AddToSession, 'add_to_session', self.add_to_session_cb)
+        self.remove_srv = self.create_service(RemoveFromSession, 'remove_from_session', self.remove_from_session_cb)
         self.list_srv = self.create_service(ListSession, 'list_session', self.list_session_cb)
         self.get_sol_srv = self.create_service(GetSolution, 'get_solution', self.get_solution_cb)
 
@@ -116,7 +117,7 @@ class VampireRunner(Node):
     # ---- Services ----
     def start_session_cb(self, request, response):
         session_id = str(uuid.uuid4())
-        self.sessions[session_id] = []
+        self.sessions[session_id] = {}
         self.get_logger().info(f"Created session {session_id}")
         response.session_id = session_id
         return response
@@ -127,8 +128,23 @@ class VampireRunner(Node):
             self.get_logger().info(f"Couldn't add to session {sid}. Session not found!")
             response.success = False
             return response
-        self.get_logger().info(f"Adding to session {sid}. Formula: {request.tptp}")
-        self.sessions[sid].append(request.tptp)
+        fsid = request.formula_set_id
+        self.get_logger().info(f"Adding to session {sid}, formula_set '{fsid}'. Formula: {request.tptp}")
+        if fsid not in self.sessions[sid]:
+            self.sessions[sid][fsid] = []
+        self.sessions[sid][fsid].append(request.tptp)
+        response.success = True
+        return response
+
+    def remove_from_session_cb(self, request, response):
+        sid = request.session_id
+        fsid = request.formula_set_id
+        if sid not in self.sessions or fsid not in self.sessions[sid]:
+            self.get_logger().info(f"Couldn't remove formula_set '{fsid}' from session {sid}. Not found!")
+            response.success = False
+            return response
+        del self.sessions[sid][fsid]
+        self.get_logger().info(f"Removed formula_set '{fsid}' from session {sid}.")
         response.success = True
         return response
 
@@ -141,7 +157,7 @@ class VampireRunner(Node):
             return response
         self.get_logger().info(f"Listing a session {sid}.")
         response.success = True
-        response.formulas = self.sessions[sid]
+        response.formulas = [f for fs in self.sessions[sid].values() for f in fs]
         return response
 
     def get_solution_cb(self, request, response):
@@ -218,7 +234,8 @@ class VampireRunner(Node):
 
             child_sock.close()
 
-            data = "\n".join(self.sessions[sid]+[goal_handle.request.query])
+            all_formulas = [f for fs in self.sessions[sid].values() for f in fs]
+            data = "\n".join(all_formulas+[goal_handle.request.query])
 
             try:
                 solver_proc.stdin.write(data)
