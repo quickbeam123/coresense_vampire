@@ -129,7 +129,7 @@ class VampireRunner(Node):
             response.success = False
             return response
         fsid = request.formula_set_id
-        self.get_logger().info(f"Adding to session {sid}, formula_set '{fsid}'. Formula: {request.tptp}")
+        self.get_logger().info(f"Adding to session {sid}, formula_set '{fsid}'. Formulas:\n{request.tptp}")
         if fsid not in self.sessions[sid]:
             self.sessions[sid][fsid] = []
         self.sessions[sid][fsid].append(request.tptp)
