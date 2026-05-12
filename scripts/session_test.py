@@ -260,7 +260,7 @@ class SessionTester(Node):
 
         # Query — should succeed with the external axiom present
         query = "tff(c,conjecture,?[A:j]:p(A))."
-        config = "--input_syntax tptp -updr off -t 1"
+        config = "--input_syntax tptp -updr off -s 1010 -t 1"
         result = self.run_reasoner_query(session_id, query, configuration=config)
         assert result.code == 0, f"Expected SUCCESS (0), got {VAMP_CODES[result.code]} ({result.code})"
         self.get_logger().info("First query succeeded as expected (with axioms).")
