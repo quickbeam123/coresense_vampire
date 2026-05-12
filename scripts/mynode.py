@@ -339,12 +339,12 @@ class VampireRunner(Node):
             result.result = f"Out:\n{out}\nErr:\n{err}"
 
             if solver_proc.returncode != 0:
-                self.get_logger().error(f"Solver failed:\nOut:\n{out}\nErr:\n{err}")
-                goal_handle.abort()
+                self.get_logger().info(f"Solver failed to resolve the query:\nOut:\n{out}\nErr:\n{err}")
             else:
                 self.get_logger().info(f"Solver succeeded for {sid}")
                 self.solutions[sid] = out.strip()
-                goal_handle.succeed()
+
+            goal_handle.succeed()
 
             return result
 
