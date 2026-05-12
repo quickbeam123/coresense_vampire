@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from coresense_msgs.srv import StartSession, AddToSession, ListSession, GetSolution
+from coresense_msgs.srv import StartSession, AddToSession, RemoveFromSession, ListSession, GetSolution
 
 from rclpy.action import ActionClient
 from coresense_msgs.action import QueryReasoner
@@ -225,10 +225,67 @@ class SessionTester(Node):
         self.get_logger().info(f"[{sid2}] Return code: {result2.code}")
 
 
+    def run_formula_sets(self):
+        # Start session
+        start_res = self.call_service(StartSession, '/start_session', StartSession.Request())
+        session_id = start_res.session_id
+        self.get_logger().info(f"Session ID: {session_id}")
+
+        # Add type declarations under "types" formula set
+        for formula in [
+            'tff(t1,type,j : $tType).',
+            'tff(t2,type,p : j > $o).',
+        ]:
+            req = AddToSession.Request()
+            req.session_id = session_id
+            req.tptp = formula
+            req.formula_set_id = "types"
+            res = self.call_service(AddToSession, '/add_to_session', req)
+            self.get_logger().info(f"Added to 'types': '{formula}': {res.success}")
+
+        # Add external axiom under "axioms" formula set
+        axiom = 'tff(a,external,?[A:j]:p(A),"/external").'
+        req = AddToSession.Request()
+        req.session_id = session_id
+        req.tptp = axiom
+        req.formula_set_id = "axioms"
+        res = self.call_service(AddToSession, '/add_to_session', req)
+        self.get_logger().info(f"Added to 'axioms': '{axiom}': {res.success}")
+
+        # List session — should contain all 3 formulas
+        list_req = ListSession.Request()
+        list_req.session_id = session_id
+        list_res = self.call_service(ListSession, '/list_session', list_req)
+        self.get_logger().info(f"Session contents (all sets): {list_res.formulas}")
+
+        # Query — should succeed with the external axiom present
+        query = "tff(c,conjecture,?[A:j]:p(A))."
+        config = "--input_syntax tptp -updr off -t 1"
+        result = self.run_reasoner_query(session_id, query, configuration=config)
+        assert result.code == 0, f"Expected SUCCESS (0), got {VAMP_CODES[result.code]} ({result.code})"
+        self.get_logger().info("First query succeeded as expected (with axioms).")
+
+        # Remove the "axioms" formula set
+        rm_req = RemoveFromSession.Request()
+        rm_req.session_id = session_id
+        rm_req.formula_set_id = "axioms"
+        rm_res = self.call_service(RemoveFromSession, '/remove_from_session', rm_req)
+        self.get_logger().info(f"Removed 'axioms' formula set: {rm_res.success}")
+
+        # List session — should only have the type declarations
+        list_res = self.call_service(ListSession, '/list_session', list_req)
+        self.get_logger().info(f"Session contents (after removal): {list_res.formulas}")
+
+        # Query again — should timeout/fail since the external axiom is gone
+        result = self.run_reasoner_query(session_id, query, configuration=config)
+        assert result.code == 1, f"Expected UNKNOWN (1), got {VAMP_CODES[result.code]} ({result.code})"
+        self.get_logger().info("Second query returned UNKNOWN as expected (axioms removed).")
+
+
 def main():
     rclpy.init()
     node = SessionTester()
-    node.run()
+    node.run_formula_sets()
     node.destroy_node()
     rclpy.shutdown()
 
